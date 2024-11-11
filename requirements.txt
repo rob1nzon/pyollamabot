@@ -1,0 +1,5 @@
+telebot
+aiohttp
+ollama
+docstring_parser
+pillow

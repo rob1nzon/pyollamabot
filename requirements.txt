@@ -3,3 +3,6 @@ aiohttp
 ollama
 docstring_parser
 pillow
+serpapi
+wyoming
+scapy

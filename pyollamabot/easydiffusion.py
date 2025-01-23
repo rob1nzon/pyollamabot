@@ -1,13 +1,15 @@
 import requests
 import time
 import os
-import ijson
+import random
 
 OLLAMA_HOST = os.getenv(key="OLLAMA_HOST")
+ED_MODEL = os.getenv(key="ED_MODEL", default='dreamshaper_8')
+
 import requests
 import re
 
-def create_image(prompt_text, seed=2960155758, api_url=f"http://{OLLAMA_HOST}:9000/render"):
+def create_image(prompt_text, seed=random.randint(0, 2960155758), api_url=f"http://{OLLAMA_HOST}:9000/render"):
     """
     Creates an image by sending a request to the Easy Diffusion API with the given prompt.
     
@@ -34,7 +36,7 @@ def create_image(prompt_text, seed=2960155758, api_url=f"http://{OLLAMA_HOST}:90
         "height": 512,
         "vram_usage_level": "balanced",
         "sampler_name": "euler_a",
-        "use_stable_diffusion_model": "sd-v1-4",
+        "use_stable_diffusion_model": f"{ED_MODEL}",
         "clip_skip": False,
         "use_vae_model": "",
         "stream_progress_updates": True,

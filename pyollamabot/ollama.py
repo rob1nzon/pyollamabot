@@ -1,10 +1,11 @@
+import logging
 import os
 import json
 import ollama
 import asyncio
 from ollama import Client
 import inspect
-from typing import Callable, List, Dict
+from typing import Callable, List, Dict, Any
 import io
 from contextlib import redirect_stdout
 from pyollamabot.search import search_internet
@@ -19,15 +20,14 @@ from scapy.all import (
 
 from pyollamabot.easydiffusion import create_image, poll_image_status
 
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+# Global history storage
+chat_history: List[Dict[str, Any]] = []
 
 OLLAMA_HOST = os.getenv(key="OLLAMA_HOST")
 OLLAMA_MODEL = os.getenv(key="OLLAMA_MODEL")
 
-import inspect
-from typing import Callable, List, Dict
-
-import inspect
-from typing import Callable, List, Dict
 from docstring_parser import parse
 
 def functions_to_metadata(functions: List[Callable]) -> List[Dict]:
@@ -73,8 +73,87 @@ def functions_to_metadata(functions: List[Callable]) -> List[Dict]:
 
     return metadata
 
-# Simulates an API call to get flight times
-# In a real application, this would fetch data from a live database or API
+def analyze_chat_history(query: str = None) -> str:
+    """Analyze chat history with optional filtering by query
+
+    Args:
+        query (str, optional): Search term to filter messages
+    """
+
+
+    global chat_history
+
+    logger.debug("analyze")
+    
+    filtered_history = chat_history
+    if query:
+        filtered_history = [
+            msg for msg in filtered_history 
+            if query.lower() in str(msg.get('content', '')).lower()
+        ]
+    logger.debug(filtered_history)
+    msg_parts = []
+    for message in filtered_history:
+        # Для сообщений-словарей (обычные сообщения)
+        if isinstance(message, dict):
+            # Проверяем наличие всех необходимых ключей
+            if 'user' in message and 'content' in message:
+                user_name = message['user'].get('name', 'Unknown') if isinstance(message['user'], dict) else 'Unknown'
+                content = message['content']
+                msg_parts.append(f"{user_name}: {content}")
+        
+        # Для объектов Message (ответы бота)
+        else:
+            # Используем getattr с дефолтными значениями на случай отсутствия атрибутов
+            user_name = getattr(message.user, 'name', 'Unknown') if hasattr(message, 'user') else 'Unknown'
+            content = getattr(message, 'content', '')
+            if content:  # Пропускаем пустые сообщения
+                msg_parts.append(f"{user_name}: {content}")
+
+    log_message = ' '.join(msg_parts)
+    return log_message, None
+
+def get_chat_history(limit: int = None) -> str:
+    """Get recent chat history with optional limit
+
+    Args:
+        limit (int, optional): Number of most recent messages to return
+    """
+    global chat_history
+
+    logger.debug("get chat history")
+   
+    
+    if limit:
+        try:
+            limit = int(limit)
+            history = chat_history[-limit:]
+        except ValueError:
+            return "Invalid limit value. Must be an integer", None
+    else:
+        history = chat_history
+    logger.debug(history)
+    msg_parts = []
+    for message in history:
+        # Для сообщений-словарей (обычные сообщения)
+        if isinstance(message, dict):
+            # Проверяем наличие всех необходимых ключей
+            if 'user' in message and 'content' in message:
+                user_name = message['user'].get('name', 'Unknown') if isinstance(message['user'], dict) else 'Unknown'
+                content = message['content']
+                msg_parts.append(f"{user_name}: {content}")
+        
+        # Для объектов Message (ответы бота)
+        else:
+            # Используем getattr с дефолтными значениями на случай отсутствия атрибутов
+            user_name = getattr(message.user, 'name', 'Unknown') if hasattr(message, 'user') else 'Unknown'
+            content = getattr(message, 'content', '')
+            if content:  # Пропускаем пустые сообщения
+                msg_parts.append(f"{user_name}: {content}")
+
+    log_message = ' '.join(msg_parts)
+    return log_message, None
+
 def execute_python(code: str) -> str:
     """Execute Python code in a safe environment and return the output. Use scapy for network
 
@@ -162,8 +241,7 @@ def create_picture(description) -> str:
     image64 = poll_image_status(stream)
     return f'create_picture({description})', image64
 
-
-async def ask_model(messages):
+async def ask_model(messages: List[Dict[str, Any]]):
     model = OLLAMA_MODEL
     image = None
     client = ollama.AsyncClient(host=f'http://{OLLAMA_HOST}:11434')
@@ -172,10 +250,17 @@ async def ask_model(messages):
     response = await client.chat(
         model=model,
         messages=messages,
-        tools=functions_to_metadata([create_picture, search_internet, execute_python])
+        tools=functions_to_metadata([
+            create_picture, 
+            search_internet, 
+            execute_python,
+            analyze_chat_history,
+            get_chat_history
+        ])
     )
 
-    # Add the model's response to the conversation history
+    # Store in global history
+    chat_history.append(response['message'])
     messages.append(response['message'])
 
     full_response = ''
@@ -185,27 +270,30 @@ async def ask_model(messages):
         return full_response, image
 
     # Process function calls made by the model
-
     if response['message'].get('tool_calls'):
         print('Call function')
         available_functions = {
             'create_picture': create_picture,
             'search_internet': search_internet,
             'execute_python': execute_python,
+            'analyze_chat_history': analyze_chat_history,
+            'get_chat_history': get_chat_history
         }
         for tool in response['message']['tool_calls']:
             function_to_call = available_functions[tool['function']['name']]
             print(tool)
             function_response, image = function_to_call(**tool['function']['arguments'])
             # Add function response to the conversation
-            messages.append({
+            tool_message = {
                 'role': 'tool',
                 'content': function_response,
-            })
-            #full_response += f"```{function_response}```"
+            }
+            messages.append(tool_message)
+            chat_history.append(tool_message)
 
     # Second API call: Get final response from the model
     final_response = await client.chat(model=model, messages=messages)
+    chat_history.append(final_response['message'])
     full_response += final_response['message']['content']
 
     return full_response, image

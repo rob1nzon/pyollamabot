@@ -127,6 +127,25 @@ async def voice(message):
 		
         await bot.reply_to(message=message, text=text, parse_mode='HTML')
         
+        # Store transcribed message in histories
+        if not history.get(message.chat.id):
+            history[message.chat.id] = []
+        history[message.chat.id].append([message.from_user.first_name, text])
+        
+        # Store in ollama's global history
+        from pyollamabot.ollama import chat_history
+        chat_history.append({
+            'role': role(message.from_user),
+            'content': text,
+            'user': {
+                'id': message.from_user.id,
+                'name': message.from_user.first_name
+            },
+            'chat_id': message.chat.id,
+            'message_id': message.message_id,
+            'type': 'voice'
+        })
+
         rand_value = random.randint(0, 100)
         if  rand_value != 42:
             return
@@ -144,6 +163,15 @@ async def voice(message):
         if answer and not 'im_start' in answer:
                 logger.debug("Sending text response")
                 await bot.reply_to(message, answer, parse_mode='HTML')
+                # Store bot's response in histories
+                history[message.chat.id].append([bot_info.first_name, answer])
+                chat_history.append({
+                    'role': 'assistant',
+                    'content': answer,
+                    'chat_id': message.chat.id,
+                    'message_id': message.message_id,
+                    'type': 'voice_response'
+                })
                 
     except Exception as e:
         logger.error(f"Error processing voice message: {e}", exc_info=True)
@@ -154,17 +182,26 @@ async def voice(message):
 async def echo_message(message: Message):
 	bot_info = await bot.get_me()
 	if not history.get(message.chat.id):
-		# await bot.send_dice(message.chat.id)
 		history[message.chat.id] = []
 	history[message.chat.id].append([message.from_user.first_name, message.text])
+	
+	# Store in ollama's global history
+	from pyollamabot.ollama import chat_history
+	chat_history.append({
+		'role': role(message.from_user),
+		'content': message.text,
+		'user': {
+			'id': message.from_user.id,
+			'name': message.from_user.first_name
+		},
+		'chat_id': message.chat.id,
+		'message_id': message.message_id
+	})
 
-	if len(history[message.chat.id]) > 70:
+	if len(history[message.chat.id]) > 10000:
 		msg_history = ' '.join([f'{user}:{msg}' for user, msg in history[message.chat.id]])
 		history[message.chat.id] = []
 		messages = []
-		messages.append({'role': f'{role(message.from_user)}', 'content': f'Необходим краткий пересказ по общению в этом чате. Укажи кратко у кого что случилось в несколько предложений. История чата: {msg_history}'})
-		answer, image = await ask_model(messages=messages)
-		# await bot.send_message(message.chat.id, f'#summary || {answer}||')
 	mention = (message.reply_to_message and message.reply_to_message.from_user.username == bot_info.username)
 	direct = message.text.startswith(f'@{bot_info.username}')
 
@@ -192,6 +229,14 @@ async def echo_message(message: Message):
 				await bot.send_photo(chat_id=message.chat.id,reply_to_message_id=message.id, photo=image_bin, caption=answer, parse_mode='HTML')
 			else:
 				await bot.reply_to(message, answer, parse_mode='HTML')
+				# Store bot's response in histories
+				history[message.chat.id].append([bot_info.first_name, answer])
+				chat_history.append({
+					'role': 'assistant',
+					'content': answer,
+					'chat_id': message.chat.id,
+					'message_id': message.message_id
+				})
 			break
 		time.sleep(2)
 

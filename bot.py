@@ -48,11 +48,77 @@ def role(msg):
 
 @bot.message_handler(content_types=['photo'])
 async def photo(message):
-	fileID = message.photo[-1].file_id
-	file_info = await bot.get_file(fileID)
-	downloaded_file = await bot.download_file(file_info.file_path)
-	# if random.randint(20,50) == 42:
-		# await bot.reply_to(message, 'баян', parse_mode='HTML')
+    try:
+        bot_info = await bot.get_me()
+        mention = (message.reply_to_message and message.reply_to_message.from_user.username == bot_info.username)
+        direct = message.caption and message.caption.startswith(f'@{bot_info.username}')
+
+        rand_value = random.randint(0, 200)
+        if not mention and not direct and rand_value != 42:
+            return
+
+        await bot.send_chat_action(chat_id=message.chat.id, action='typing')
+        
+        # Get caption if it exists
+        caption = message.caption.replace(f'@{bot_info.username}', '').strip() if message.caption else ""
+        
+        # If replying to a message with photo, use that photo instead
+        if message.reply_to_message and message.reply_to_message.photo:
+            fileID = message.reply_to_message.photo[-1].file_id
+        else:
+            fileID = message.photo[-1].file_id
+        file_info = await bot.get_file(fileID)
+        downloaded_file = await bot.download_file(file_info.file_path)
+
+        # Analyze image using moondream
+        from pyollamabot.ollama import analyze_image
+        image_description = await analyze_image(downloaded_file)
+
+        # Store the image analysis in history
+        if not history.get(message.chat.id):
+            history[message.chat.id] = []
+        history[message.chat.id].append([message.from_user.first_name, f"[Sent a photo: {image_description}]"])
+
+        # Store in ollama's global history
+        from pyollamabot.ollama import chat_history
+        chat_history.append({
+            'role': role(message.from_user),
+            'content': f"[Photo: {image_description}]",
+            'user': {
+                'id': message.from_user.id,
+                'name': message.from_user.first_name
+            },
+            'chat_id': message.chat.id,
+            'message_id': message.message_id,
+            'type': 'photo'
+        })
+
+        # Process the image description with the main model
+        bot_info = await bot.get_me()
+        # Prepare message content based on whether it's a reply to a photo or a new photo
+        if message.reply_to_message and message.reply_to_message.photo:
+            messages = [{'role': 'user', 'content': f"Пользователь спрашивает{' с подписью: ' + caption if caption else ''} про фотографию на которой: {image_description}"}]
+        else:
+            messages = [{'role': 'user', 'content': f"Пользователь отправил фотографию{' с подписью: ' + caption if caption else ''}. Вот что на ней: {image_description}"}]
+        
+        await bot.send_chat_action(chat_id=message.chat.id, action='typing')
+        answer, _ = await ask_model(messages=messages)
+        
+        if answer and not 'im_start' in answer:
+            await bot.reply_to(message, answer, parse_mode='HTML')
+            # Store bot's response in histories
+            history[message.chat.id].append([bot_info.first_name, answer])
+            chat_history.append({
+                'role': 'assistant',
+                'content': answer,
+                'chat_id': message.chat.id,
+                'message_id': message.message_id,
+                'type': 'photo_response'
+            })
+            
+    except Exception as e:
+        logger.error(f"Error processing photo: {e}", exc_info=True)
+        await bot.reply_to(message, 'Произошла ошибка при обработке фотографии.')
 
 history = {}
 
@@ -212,33 +278,77 @@ async def echo_message(message: Message):
 
 
 	msg = message.text.replace(f'@{bot_info.username}', '').strip()
-	if rand_value == 42:
-		msg = f"Ты приятель пользователя, он говорит тебе: {msg}. Что бы ты ему ответил в неформальном стиле. Подшути над ним. Коротко. {msg}"
 
-	for _ in range(10):
-		messages = []
-		if message.reply_to_message:
-			messages.append({'role': f'{role(message.reply_to_message.from_user)}', 'content': f'{message.reply_to_message.text}'})
-		messages.append({'role': f'{role(message.from_user)}', 'content': f'{msg}'})
-		answer, image = await ask_model(messages=messages)
+	# Check if replying to a message with photo
+	if message.reply_to_message and message.reply_to_message.photo:
+		# Download and analyze the photo
+		fileID = message.reply_to_message.photo[-1].file_id
+		file_info = await bot.get_file(fileID)
+		downloaded_file = await bot.download_file(file_info.file_path)
+
+		# Analyze image using moondream
+		from pyollamabot.ollama import analyze_image
+		image_description = await analyze_image(downloaded_file)
+
+		# Store the image analysis in history
+		if not history.get(message.chat.id):
+			history[message.chat.id] = []
+		history[message.chat.id].append([message.from_user.first_name, f"[Asked about photo: {image_description}]"])
+
+		# Store in ollama's global history
+		chat_history.append({
+			'role': role(message.from_user),
+			'content': f"[Question about photo: {image_description}]",
+			'user': {
+				'id': message.from_user.id,
+				'name': message.from_user.first_name
+			},
+			'chat_id': message.chat.id,
+			'message_id': message.message_id,
+			'type': 'photo_question'
+		})
+
+		messages = [{'role': 'user', 'content': f"Пользователь спрашивает: {msg} про фотографию на которой: {image_description}"}]
+		answer, _ = await ask_model(messages=messages)
 		if answer and not 'im_start' in answer:
-			if image:
-				await bot.send_chat_action(chat_id=message.chat.id, action='upload_photo')
-				image_data = base64.b64decode(image.split(',')[1])
-				image_bin = Image.open(BytesIO(image_data))
-				await bot.send_photo(chat_id=message.chat.id,reply_to_message_id=message.id, photo=image_bin, caption=answer, parse_mode='HTML')
-			else:
-				await bot.reply_to(message, answer, parse_mode='HTML')
-				# Store bot's response in histories
-				history[message.chat.id].append([bot_info.first_name, answer])
-				chat_history.append({
-					'role': 'assistant',
-					'content': answer,
-					'chat_id': message.chat.id,
-					'message_id': message.message_id
-				})
-			break
-		time.sleep(2)
+			await bot.reply_to(message, answer, parse_mode='HTML')
+			# Store bot's response in histories
+			history[message.chat.id].append([bot_info.first_name, answer])
+			chat_history.append({
+				'role': 'assistant',
+				'content': answer,
+				'chat_id': message.chat.id,
+				'message_id': message.message_id,
+				'type': 'photo_question_response'
+			})
+	else:
+		if rand_value == 42:
+			msg = f"Ты приятель пользователя, он говорит тебе: {msg}. Что бы ты ему ответил в неформальном стиле. Подшути над ним. Коротко. {msg}"
+
+		for _ in range(10):
+			messages = []
+			if message.reply_to_message:
+				messages.append({'role': f'{role(message.reply_to_message.from_user)}', 'content': f'{message.reply_to_message.text}'})
+			messages.append({'role': f'{role(message.from_user)}', 'content': f'{msg}'})
+			answer, image = await ask_model(messages=messages)
+			if answer and not 'im_start' in answer:
+				if image:
+					await bot.send_chat_action(chat_id=message.chat.id, action='upload_photo')
+					image_data = base64.b64decode(image.split(',')[1])
+					image_bin = Image.open(BytesIO(image_data))
+					await bot.send_photo(chat_id=message.chat.id,reply_to_message_id=message.id, photo=image_bin, caption=answer, parse_mode='HTML')
+				else:
+					await bot.reply_to(message, answer, parse_mode='HTML')
+					# Store bot's response in histories
+					history[message.chat.id].append([bot_info.first_name, answer])
+					chat_history.append({
+						'role': 'assistant',
+						'content': answer,
+						'chat_id': message.chat.id,
+						'message_id': message.message_id
+					})
+				break
+			time.sleep(2)
 
 
 asyncio.run(bot.polling())

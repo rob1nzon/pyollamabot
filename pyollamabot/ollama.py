@@ -3,6 +3,7 @@ import os
 import json
 import ollama
 import asyncio
+import base64
 from ollama import Client
 import inspect
 from typing import Callable, List, Dict, Any
@@ -230,6 +231,29 @@ def execute_python(code: str) -> str:
     
     return result, None
 
+async def analyze_image(image_data: bytes) -> str:
+    """Analyze image using moondream model and return description
+
+    Args:
+        image_data (bytes): Raw image data to analyze
+    """
+    client = ollama.AsyncClient(host=f'http://{OLLAMA_HOST}:11434')
+    
+    # Convert image to base64
+    image_base64 = base64.b64encode(image_data).decode('utf-8')
+    
+    # Call moondream model to analyze image
+    response = await client.chat(
+        model="moondream",
+        messages=[{
+            'role': 'user',
+            'content': 'Describe this photo in detail',
+            'images': [image_base64]
+        }]
+    )
+    
+    return response['message']['content']
+
 def create_picture(description) -> str:
     """Create picture, add object on picture, change picture, if change remember history. Use english
 
@@ -251,9 +275,9 @@ async def ask_model(messages: List[Dict[str, Any]]):
         model=model,
         messages=messages,
         tools=functions_to_metadata([
-            create_picture, 
-            search_internet, 
-            execute_python,
+            # create_picture, 
+            # search_internet, 
+            # execute_python,
             analyze_chat_history,
             get_chat_history
         ])
@@ -273,9 +297,9 @@ async def ask_model(messages: List[Dict[str, Any]]):
     if response['message'].get('tool_calls'):
         print('Call function')
         available_functions = {
-            'create_picture': create_picture,
-            'search_internet': search_internet,
-            'execute_python': execute_python,
+            # 'create_picture': create_picture,
+            # 'search_internet': search_internet,
+            # 'execute_python': execute_python,
             'analyze_chat_history': analyze_chat_history,
             'get_chat_history': get_chat_history
         }

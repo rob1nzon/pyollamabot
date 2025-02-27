@@ -10,6 +10,7 @@ import logging
 import io
 import sys
 import json
+import re
 from contextlib import redirect_stdout
 from pyollamabot.ollama import ask_model, create_picture
 from pyollamabot.transcribe import WyomingTranscriber
@@ -22,6 +23,27 @@ from telebot.types import Message, ReactionTypeEmoji
 import base64
 from io import BytesIO
 from PIL import Image
+
+# Function to convert markdown code blocks to HTML
+def convert_code_blocks_to_html(text):
+    if not text:
+        return text
+    
+    # Pattern to match code blocks with triple backticks
+    # This will match both with and without language specification
+    pattern = r'```(?:(\w+)\n)?(.*?)```'
+    
+    def replace_code_block(match):
+        language = match.group(1) or ''
+        code = match.group(2)
+        # If language is specified, add it as a class
+        lang_attr = f' class="language-{language}"' if language else ''
+        return f'<pre><code{lang_attr}>{code}</code></pre>'
+    
+    # Replace all code blocks in the text
+    result = re.sub(pattern, replace_code_block, text, flags=re.DOTALL)
+    logger.debug(f"Converted code blocks in text: {result}")
+    return result
 
 token = os.getenv(key="TOKEN")
 bot = AsyncTeleBot(token)
@@ -120,6 +142,8 @@ async def photo(message):
         answer, _ = await ask_model(messages=messages)
         
         if answer and not 'im_start' in answer:
+            # Convert code blocks to HTML
+            answer = convert_code_blocks_to_html(answer)
             await bot.reply_to(message, answer, parse_mode='HTML')
             # Store bot's response in histories
             history[message.chat.id].append([bot_info.first_name, answer])
@@ -232,9 +256,10 @@ async def voice(message):
             await bot.reply_to(message, 'Не удалось распознать голосовое сообщение. Попробуйте еще раз или отправьте текст.')
             return
 		
-        # Convert any <reasoning> tags to Telegram spoiler tags
+        # Convert any <reasoning> tags to Telegram spoiler tags and code blocks to HTML
         logger.debug(f"Original transcription: {text}")
         text = text.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>')
+        text = convert_code_blocks_to_html(text)
         logger.debug(f"Converted transcription: {text}")
         await bot.reply_to(message=message, text=text, parse_mode='HTML')
         
@@ -274,10 +299,11 @@ async def voice(message):
         
         if answer and not 'im_start' in answer:
                 logger.debug("Sending text response")
-                # Convert any <reasoning> tags to Telegram spoiler tags and remove <answer> tags
+                # Convert any <reasoning> tags to Telegram spoiler tags, remove <answer> tags, and convert code blocks to HTML
                 logger.debug(f"Original message: {answer}")
                 answer = answer.replace('<reasoning>', ' expandable="1"').replace('</reasoning>', '</blockquote>')
                 answer = answer.replace('<answer>', '').replace('</answer>', '')
+                answer = convert_code_blocks_to_html(answer)
                 logger.debug(f"Converted message: {answer}")
                 await bot.reply_to(message, answer, parse_mode='HTML')
                 # Store bot's response in histories
@@ -374,10 +400,11 @@ async def echo_message(message: Message):
 		answer, _ = await ask_model(messages=messages)
 		logger.debug(f"Raw model response: {answer}")
 		if answer and not 'im_start' in answer:
-			# Convert any <reasoning> tags to Telegram spoiler tags and remove <answer> tags
+			# Convert any <reasoning> tags to Telegram spoiler tags, remove <answer> tags, and convert code blocks to HTML
 			logger.debug(f"Original message: {answer}")
 			answer = answer.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>')
 			answer = answer.replace('<answer>', '').replace('</answer>', '')
+			answer = convert_code_blocks_to_html(answer)
 			logger.debug(f"Converted message: {answer}")
 			await bot.reply_to(message, answer, parse_mode='HTML')
 			# Store bot's response in histories
@@ -405,16 +432,18 @@ async def echo_message(message: Message):
 					await bot.send_chat_action(chat_id=message.chat.id, action='upload_photo')
 					image_data = base64.b64decode(image.split(',')[1])
 					image_bin = Image.open(BytesIO(image_data))
-					# Convert any <reasoning> tags to Telegram spoiler tags
+					# Convert any <reasoning> tags to Telegram spoiler tags and code blocks to HTML
 					logger.debug(f"Original photo caption: {answer}")
 					answer = answer.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>')
+					answer = convert_code_blocks_to_html(answer)
 					logger.debug(f"Converted photo caption: {answer}")
 					await bot.send_photo(chat_id=message.chat.id,reply_to_message_id=message.id, photo=image_bin, caption=answer, parse_mode='HTML')
 				else:
-					# Convert any <reasoning> tags to Telegram spoiler tags and remove <answer> tags
+					# Convert any <reasoning> tags to Telegram spoiler tags, remove <answer> tags, and convert code blocks to HTML
 					logger.debug(f"Original message: {answer}")
 					answer = answer.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>')
 					answer = answer.replace('<answer>', '').replace('</answer>', '')
+					answer = convert_code_blocks_to_html(answer)
 					logger.debug(f"Converted message: {answer}")
 					await bot.reply_to(message, answer, parse_mode='HTML')
 					# Store bot's response in histories

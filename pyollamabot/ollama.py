@@ -274,13 +274,13 @@ async def ask_model(messages: List[Dict[str, Any]]):
     response = await client.chat(
         model=model,
         messages=messages,
-        tools=functions_to_metadata([
+        #tools=functions_to_metadata([
             # create_picture, 
             # search_internet, 
             # execute_python,
-            analyze_chat_history,
-            get_chat_history
-        ])
+          #  analyze_chat_history,
+         #   get_chat_history
+        #])
     )
 
     # Store in global history

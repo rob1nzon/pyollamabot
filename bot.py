@@ -12,8 +12,10 @@ import sys
 import json
 import re
 from contextlib import redirect_stdout
+
 from pyollamabot.ollama import ask_model, create_picture
 from pyollamabot.transcribe import WyomingTranscriber
+from gradio_client import Client
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -76,6 +78,75 @@ async def generate_image(message):
 	image_data = base64.b64decode(image.split(',')[1])
 	image_bin = Image.open(BytesIO(image_data))
 	await bot.send_photo(chat_id=message.chat.id,reply_to_message_id=message.id, photo=image_bin, has_spoiler=True)
+
+@bot.message_handler(commands=['web_use'])
+async def generate_image(message):
+    msg = message.text.replace('/web_use', '').strip()
+    client = Client("http://host.docker.internal:7788/")
+    result = client.predict(
+        agent_type="custom",
+        llm_provider="openai",
+        llm_model_name="nvidia/llama-3.1-nemotron-ultra-253b-v1:free",
+        llm_num_ctx=16000,
+        llm_temperature=0.6,
+        llm_base_url="",
+        llm_api_key="",
+        use_own_browser=False,
+        keep_browser_open=False,
+        headless=False,
+        disable_security=True,
+        window_w=1280,
+        window_h=1100,
+        save_recording_path="./tmp/record_videos",
+        save_agent_history_path="./tmp/agent_history",
+        save_trace_path="./tmp/traces",
+        enable_recording=True,
+        task=msg,
+        add_infos="",
+        max_steps=100,
+        use_vision=False,
+        max_actions_per_step=10,
+        tool_calling_method="auto",
+        chrome_cdp="",
+        max_input_tokens=128000,
+        api_name="/run_with_stream"
+    )
+	# await bot.send_chat_action(chat_id=message.chat.id, action='upload_photo')
+    logger.debug(result)
+    answer =result[1]
+    agent_gif = result[5].split("=")[-1]
+    image_url = f"http://host.docker.internal:7788/gradio_api/file={agent_gif}"
+    
+    # Download the GIF from the URL using aiohttp
+    import aiohttp
+    from io import BytesIO
+    
+    try:
+        # Download the GIF
+        async with aiohttp.ClientSession() as session:
+            async with session.get(image_url) as response:
+                if response.status != 200:
+                    raise Exception(f"Failed to download GIF: HTTP {response.status}")
+                
+                # Read the content
+                content = await response.read()
+                
+                # Create a BytesIO object from the downloaded content
+                gif_data = BytesIO(content)
+        
+        # Send the video note
+        await bot.send_video_note(message.chat.id, gif_data)
+        
+        # Also send the answer text if available
+        if answer:
+            await bot.reply_to(message, answer, parse_mode='HTML')
+    except Exception as e:
+        logger.error(f"Error downloading or sending GIF: {e}", exc_info=True)
+        await bot.reply_to(message, f"Error processing GIF: {str(e)}")
+    
+	# image_data = base64.b64decode(image.split(',')[1])
+	# image_bin = Image.open(BytesIO(image_data))
+	# await bot.send_photo(chat_id=message.chat.id,reply_to_message_id=message.id, photo=image_bin, has_spoiler=True)
 
 
 def role(msg):
@@ -259,7 +330,7 @@ async def voice(message):
 		
         # Convert any <reasoning> tags to Telegram spoiler tags and code blocks to HTML
         logger.debug(f"Original transcription: {text}")
-        text = text.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>')
+        text = text.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>').replace('<think>', '<blockquote expandable>').replace('</think>', '</blockquote>')
         text = convert_code_blocks_to_html(text)
         logger.debug(f"Converted transcription: {text}")
         await bot.reply_to(message=message, text=text, parse_mode='HTML')
@@ -302,7 +373,7 @@ async def voice(message):
                 logger.debug("Sending text response")
                 # Convert any <reasoning> tags to Telegram spoiler tags, remove <answer> tags, and convert code blocks to HTML
                 logger.debug(f"Original message: {answer}")
-                answer = answer.replace('<reasoning>', ' expandable="1"').replace('</reasoning>', '</blockquote>')
+                answer = answer.replace('<reasoning>', ' expandable="1"').replace('</reasoning>', '</blockquote>').replace('<think>', '<blockquote expandable>').replace('</think>', '</blockquote>')
                 answer = answer.replace('<answer>', '').replace('</answer>', '')
                 answer = convert_code_blocks_to_html(answer)
                 logger.debug(f"Converted message: {answer}")
@@ -403,7 +474,6 @@ async def echo_message(message: Message):
 		if answer and not 'im_start' in answer:
 			# Convert any <reasoning> tags to Telegram spoiler tags, remove <answer> tags, and convert code blocks to HTML
 			logger.debug(f"Original message: {answer}")
-			answer = answer.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>')
 			answer = answer.replace('<answer>', '').replace('</answer>', '')
 			answer = convert_code_blocks_to_html(answer)
 			logger.debug(f"Converted message: {answer}")
@@ -419,7 +489,7 @@ async def echo_message(message: Message):
 			})
 	else:
 		if rand_value == 42:
-			msg = f"Ты приятель пользователя, он говорит тебе: {msg}. Что бы ты ему ответил в неформальном стиле. Подшути над ним. Коротко. {msg}"
+			msg = f"Ты приятель пользователя, он говорит тебе: {msg}. Что бы ты ему ответил в неформальном стиле. Подшути над ним. Коротко. В одно предложение. {msg}"
 
 		for _ in range(10):
 			messages = []
@@ -435,14 +505,14 @@ async def echo_message(message: Message):
 					image_bin = Image.open(BytesIO(image_data))
 					# Convert any <reasoning> tags to Telegram spoiler tags and code blocks to HTML
 					logger.debug(f"Original photo caption: {answer}")
-					answer = answer.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>')
+					answer = answer.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>').replace('<think>', '<blockquote expandable>').replace('</think>', '</blockquote>')
 					answer = convert_code_blocks_to_html(answer)
 					logger.debug(f"Converted photo caption: {answer}")
 					await bot.send_photo(chat_id=message.chat.id,reply_to_message_id=message.id, photo=image_bin, caption=answer, parse_mode='HTML')
 				else:
 					# Convert any <reasoning> tags to Telegram spoiler tags, remove <answer> tags, and convert code blocks to HTML
 					logger.debug(f"Original message: {answer}")
-					answer = answer.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>')
+					answer = answer.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>').replace('<think>', '<blockquote expandable>').replace('</think>', '</blockquote>')
 					answer = answer.replace('<answer>', '').replace('</answer>', '')
 					answer = convert_code_blocks_to_html(answer)
 					logger.debug(f"Converted message: {answer}")

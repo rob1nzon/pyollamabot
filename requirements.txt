@@ -6,3 +6,4 @@ pillow
 serpapi
 wyoming
 scapy
+gradio_client

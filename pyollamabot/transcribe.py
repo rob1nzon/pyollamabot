@@ -5,7 +5,6 @@ from typing import Optional
 from wyoming.asr import Transcript, Transcribe
 from wyoming.audio import AudioStart, AudioChunk, AudioStop
 from wyoming.client import AsyncTcpClient
-from wyoming.info import Info
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)

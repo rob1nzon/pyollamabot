@@ -6,7 +6,6 @@ import random
 OLLAMA_HOST = os.getenv(key="OLLAMA_HOST")
 ED_MODEL = os.getenv(key="ED_MODEL", default='dreamshaper_8')
 
-import requests
 import re
 
 def create_image(prompt_text, seed=random.randint(0, 2960155758), api_url=f"http://{OLLAMA_HOST}:9000/render"):

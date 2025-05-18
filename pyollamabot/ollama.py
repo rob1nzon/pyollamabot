@@ -1,15 +1,11 @@
 import logging
 import os
-import json
 import ollama
-import asyncio
 import base64
-from ollama import Client
 import inspect
 from typing import Callable, List, Dict, Any
 import io
 from contextlib import redirect_stdout
-from pyollamabot.search import search_internet
 from scapy.all import (
     IP, TCP, UDP, ICMP, 
     Ether, ARP, DNS, Raw,
@@ -244,7 +240,7 @@ async def analyze_image(image_data: bytes) -> str:
     
     # Call moondream model to analyze image
     response = await client.chat(
-        model="moondream",
+        model="gemma3:latest",
         messages=[{
             'role': 'user',
             'content': 'Describe this photo in detail',
@@ -271,17 +267,22 @@ async def ask_model(messages: List[Dict[str, Any]]):
     client = ollama.AsyncClient(host=f'http://{OLLAMA_HOST}:11434')
 
     # First API call: Send the query and function description to the model
-    response = await client.chat(
-        model=model,
-        messages=messages,
-        #tools=functions_to_metadata([
-            # create_picture, 
-            # search_internet, 
-            # execute_python,
-          #  analyze_chat_history,
-         #   get_chat_history
-        #])
-    )
+    response = ""
+    attempt = 0
+    while not response and attempt < 10:
+        response = await client.chat(
+            model=model,
+            messages=messages,
+            #tools=functions_to_metadata([
+                # create_picture, 
+                # search_internet, 
+                # execute_python,
+            #  analyze_chat_history,
+            #   get_chat_history
+            #])
+        )
+        attempt += 1
+
 
     # Store in global history
     chat_history.append(response['message'])

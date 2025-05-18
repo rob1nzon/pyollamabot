@@ -1,6 +1,7 @@
 services:
   app:
     image: pyollamabot
+    restart: always
     env_file:
       - .env
     build:

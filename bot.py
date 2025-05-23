@@ -12,6 +12,188 @@ import sys
 import json
 import re
 from contextlib import redirect_stdout
+import textwrap
+
+# Utility functions for message handling
+def sanitize_message(text):
+    """
+    Sanitize message text by replacing angle brackets that aren't part of HTML tags.
+    This prevents issues with Telegram's HTML parser.
+    """
+    if not text:
+        return text
+    
+    # Don't modify HTML tags like <pre>, <code>, <b>, etc.
+    # This regex looks for < or > that aren't part of an HTML tag
+    # It preserves HTML tags while replacing standalone angle brackets
+    html_tags = r'</?(?:pre|code|b|i|u|s|a|em|strong|ins|del|strike|blockquote|sup|sub|span)[^>]*>'
+    
+    # First, temporarily replace valid HTML tags
+    placeholder = "HTMLTAG_PLACEHOLDER_"
+    count = 0
+    placeholders = {}
+    
+    def replace_tag(match):
+        nonlocal count
+        placeholder_key = f"{placeholder}{count}"
+        placeholders[placeholder_key] = match.group(0)
+        count += 1
+        return placeholder_key
+    
+    # Replace HTML tags with placeholders
+    text_with_placeholders = re.sub(html_tags, replace_tag, text, flags=re.IGNORECASE)
+    
+    # Now replace remaining angle brackets
+    text_with_placeholders = text_with_placeholders.replace('<', '&lt;').replace('>', '&gt;')
+    
+    # Restore HTML tags
+    for key, value in placeholders.items():
+        text_with_placeholders = text_with_placeholders.replace(key, value)
+    
+    return text_with_placeholders
+
+def split_long_message(text, max_length=4000):
+    """
+    Split a long message into smaller chunks to avoid Telegram's message size limits.
+    Returns a list of message chunks.
+    """
+    if not text:
+        return [text]
+    
+    if len(text) <= max_length:
+        return [text]
+    
+    # Split message into chunks
+    chunks = []
+    
+    # Try to split at paragraph boundaries first
+    paragraphs = text.split('\n\n')
+    current_chunk = ""
+    
+    for paragraph in paragraphs:
+        # If adding this paragraph would exceed max_length, start a new chunk
+        if len(current_chunk) + len(paragraph) + 2 > max_length:
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = paragraph
+            else:
+                # If a single paragraph is too long, split it by sentences or just by length
+                if len(paragraph) > max_length:
+                    # Split by sentences if possible
+                    sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+                    for sentence in sentences:
+                        if len(sentence) > max_length:
+                            # If even a sentence is too long, split by max_length
+                            for i in range(0, len(sentence), max_length):
+                                chunks.append(sentence[i:i+max_length])
+                        else:
+                            if current_chunk and len(current_chunk) + len(sentence) + 1 <= max_length:
+                                current_chunk += " " + sentence
+                            else:
+                                if current_chunk:
+                                    chunks.append(current_chunk)
+                                current_chunk = sentence
+                else:
+                    chunks.append(paragraph)
+        else:
+            if current_chunk:
+                current_chunk += "\n\n" + paragraph
+            else:
+                current_chunk = paragraph
+    
+    if current_chunk:
+        chunks.append(current_chunk)
+    
+    return chunks
+
+# Function to handle special tags like <think> and <reasoning>
+def process_special_tags(text):
+    """
+    Process special tags like <think> and <reasoning> and convert them to Telegram-compatible format.
+    
+    Args:
+        text: The text to process
+        
+    Returns:
+        Processed text with special tags converted
+    """
+    if not text:
+        return text
+    
+    # Replace special tags with Telegram-compatible tags
+    result = text
+    result = result.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>')
+    result = result.replace('<think>', '<blockquote expandable>').replace('</think>', '</blockquote>')
+    result = result.replace('<answer>', '').replace('</answer>', '')
+    
+    return result
+
+# Helper function for sending messages safely
+async def send_message_safely(bot, chat_id, text, message=None, parse_mode=None, **kwargs):
+    """
+    Send a message safely by sanitizing text and splitting long messages.
+    
+    Args:
+        bot: The bot instance
+        chat_id: Chat ID to send the message to
+        text: Message text
+        message: Optional message object to reply to (not just the ID)
+        parse_mode: Optional parse mode (HTML, Markdown, etc.)
+        **kwargs: Additional arguments to pass to send_message
+    
+    Returns:
+        The last sent message
+    """
+    if not text:
+        return None
+    
+    # Process special tags first
+    processed_text = process_special_tags(text)
+    
+    # Sanitize the message to handle angle brackets
+    sanitized_text = sanitize_message(processed_text)
+    
+    # Split long messages
+    message_chunks = split_long_message(sanitized_text)
+    
+    last_message = None
+    for i, chunk in enumerate(message_chunks):
+        try:
+            # For the first chunk, reply to the original message
+            # For subsequent chunks, send as regular messages
+            if i == 0 and message:
+                last_message = await bot.reply_to(
+                    message=message,
+                    text=chunk,
+                    parse_mode=parse_mode,
+                    **kwargs
+                )
+            else:
+                last_message = await bot.send_message(
+                    chat_id=chat_id,
+                    text=chunk,
+                    parse_mode=parse_mode,
+                    **kwargs
+                )
+            
+            # Small delay between chunks to ensure order
+            if i < len(message_chunks) - 1:
+                await asyncio.sleep(0.5)
+                
+        except Exception as e:
+            logger.error(f"Error sending message chunk {i+1}/{len(message_chunks)}: {e}")
+            # If sending fails, try without parse_mode as a fallback
+            if parse_mode:
+                try:
+                    last_message = await bot.send_message(
+                        chat_id=chat_id,
+                        text=f"Error sending formatted message. Sending without formatting: {chunk}",
+                        parse_mode=None
+                    )
+                except Exception as inner_e:
+                    logger.error(f"Failed to send even unformatted message: {inner_e}")
+    
+    return last_message
 
 from pyollamabot.ollama import ask_model, create_picture
 from pyollamabot.transcribe import WyomingTranscriber
@@ -54,13 +236,13 @@ bot = AsyncTeleBot(token)
 @bot.message_handler(commands=['help', 'start'])
 async def send_welcome(message):
     text = 'Hi, I am EchoBot.\nJust write me something and I will repeat it!\nUse /выполни to execute Python code.'
-    await bot.reply_to(message, text)
+    await send_message_safely(bot, message.chat.id, text, message)
 
 @bot.message_handler(commands=['show'])
 async def show_poop_stats(message):
     data = load_poop_counter()
     if not data["counters"]:
-        await bot.reply_to(message, "Пока никто не какал 💩")
+        await send_message_safely(bot, message.chat.id, "Пока никто не какал 💩", message)
         return
     
     stats = []
@@ -68,7 +250,7 @@ async def show_poop_stats(message):
         stats.append(f"{info['username']}: {info['count']} раз")
     
     response = "Статистика каканья 💩:\n" + "\n".join(stats)
-    await bot.reply_to(message, response)
+    await send_message_safely(bot, message.chat.id, response, message)
 
 @bot.message_handler(commands=['generate_image'])
 async def generate_image(message):
@@ -139,10 +321,10 @@ async def generate_image(message):
         
         # Also send the answer text if available
         if answer:
-            await bot.reply_to(message, answer, parse_mode='HTML')
+            await send_message_safely(bot, message.chat.id, answer, message, parse_mode='HTML')
     except Exception as e:
         logger.error(f"Error downloading or sending GIF: {e}", exc_info=True)
-        await bot.reply_to(message, f"Error processing GIF: {str(e)}")
+        await send_message_safely(bot, message.chat.id, f"Error processing GIF: {str(e)}", message)
     
 	# image_data = base64.b64decode(image.split(',')[1])
 	# image_bin = Image.open(BytesIO(image_data))
@@ -216,7 +398,7 @@ async def photo(message):
         if answer and not 'im_start' in answer:
             # Convert code blocks to HTML
             answer = convert_code_blocks_to_html(answer)
-            await bot.reply_to(message, answer, parse_mode='HTML')
+            await send_message_safely(bot, message.chat.id, answer, message, parse_mode='HTML')
             # Store bot's response in histories
             history[message.chat.id].append([bot_info.first_name, answer])
             chat_history.append({
@@ -229,7 +411,7 @@ async def photo(message):
             
     except Exception as e:
         logger.error(f"Error processing photo: {e}", exc_info=True)
-        await bot.reply_to(message, 'Произошла ошибка при обработке фотографии.')
+        await send_message_safely(bot, message.chat.id, 'Произошла ошибка при обработке фотографии.', message)
 
 history = {}
 
@@ -302,7 +484,7 @@ async def voice(message):
         
         if process.returncode != 0:
             logger.error(f"FFmpeg conversion failed: {stderr.decode()}")
-            await bot.reply_to(message, 'Ошибка при конвертации аудио.')
+            await send_message_safely(bot, message.chat.id, 'Ошибка при конвертации аудио.', message)
             return
             
         # Read converted audio
@@ -325,15 +507,15 @@ async def voice(message):
         
         if not text:
             logger.warning("Transcription failed or returned empty text")
-            await bot.reply_to(message, 'Не удалось распознать голосовое сообщение. Попробуйте еще раз или отправьте текст.')
+            await send_message_safely(bot, message.chat.id, 'Не удалось распознать голосовое сообщение. Попробуйте еще раз или отправьте текст.', message)
             return
 		
-        # Convert any <reasoning> tags to Telegram spoiler tags and code blocks to HTML
+        # Process special tags and convert code blocks to HTML
         logger.debug(f"Original transcription: {text}")
-        text = text.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>').replace('<think>', '<blockquote expandable>').replace('</think>', '</blockquote>')
+        text = process_special_tags(text)
         text = convert_code_blocks_to_html(text)
         logger.debug(f"Converted transcription: {text}")
-        await bot.reply_to(message=message, text=text, parse_mode='HTML')
+        await send_message_safely(bot, message.chat.id, text, message, parse_mode='HTML')
         
         # Store transcribed message in histories
         if not history.get(message.chat.id):
@@ -371,13 +553,12 @@ async def voice(message):
         
         if answer and not 'im_start' in answer:
                 logger.debug("Sending text response")
-                # Convert any <reasoning> tags to Telegram spoiler tags, remove <answer> tags, and convert code blocks to HTML
+                # Process special tags and convert code blocks to HTML
                 logger.debug(f"Original message: {answer}")
-                answer = answer.replace('<reasoning>', ' expandable="1"').replace('</reasoning>', '</blockquote>').replace('<think>', '<blockquote expandable>').replace('</think>', '</blockquote>')
-                answer = answer.replace('<answer>', '').replace('</answer>', '')
+                answer = process_special_tags(answer)
                 answer = convert_code_blocks_to_html(answer)
                 logger.debug(f"Converted message: {answer}")
-                await bot.reply_to(message, answer, parse_mode='HTML')
+                await send_message_safely(bot, message.chat.id, answer, message, parse_mode='HTML')
                 # Store bot's response in histories
                 history[message.chat.id].append([bot_info.first_name, answer])
                 chat_history.append({
@@ -390,7 +571,7 @@ async def voice(message):
                 
     except Exception as e:
         logger.error(f"Error processing voice message: {e}", exc_info=True)
-        await bot.reply_to(message, 'Произошла ошибка при обработке голосового сообщения.')
+        await send_message_safely(bot, message.chat.id, 'Произошла ошибка при обработке голосового сообщения.', message)
 
 # Handle all other messages with content_type 'text' (content_types defaults to ['text'])
 @bot.message_handler(func=lambda message: True)
@@ -426,8 +607,8 @@ async def echo_message(message: Message):
 		logger.debug(f"Poop detected for user {message.from_user.first_name} (ID: {message.from_user.id})")
 		count = increment_poop_counter(message.from_user.id, message.from_user.first_name)
 		logger.debug(f"Updated poop count for {message.from_user.first_name}: {count}")
-		response = f"{message.from_user.first_name} покакал уже {count} раз и продолжает"
-		await bot.send_message(message.chat.id, response)
+		response = f"{message.from_user.first_name} покакала уже {count} раз и продолжает"
+		await send_message_safely(bot, message.chat.id, response)
 		return
 
 	mention = (message.reply_to_message and message.reply_to_message.from_user.username == bot_info.username)
@@ -472,12 +653,12 @@ async def echo_message(message: Message):
 		answer, _ = await ask_model(messages=messages)
 		logger.debug(f"Raw model response: {answer}")
 		if answer and not 'im_start' in answer:
-			# Convert any <reasoning> tags to Telegram spoiler tags, remove <answer> tags, and convert code blocks to HTML
+			# Process special tags and convert code blocks to HTML
 			logger.debug(f"Original message: {answer}")
-			answer = answer.replace('<answer>', '').replace('</answer>', '')
+			answer = process_special_tags(answer)
 			answer = convert_code_blocks_to_html(answer)
 			logger.debug(f"Converted message: {answer}")
-			await bot.reply_to(message, answer, parse_mode='HTML')
+			await send_message_safely(bot, message.chat.id, answer, message, parse_mode='HTML')
 			# Store bot's response in histories
 			history[message.chat.id].append([bot_info.first_name, answer])
 			chat_history.append({
@@ -503,20 +684,21 @@ async def echo_message(message: Message):
 					await bot.send_chat_action(chat_id=message.chat.id, action='upload_photo')
 					image_data = base64.b64decode(image.split(',')[1])
 					image_bin = Image.open(BytesIO(image_data))
-					# Convert any <reasoning> tags to Telegram spoiler tags and code blocks to HTML
+					# Process special tags and convert code blocks to HTML
 					logger.debug(f"Original photo caption: {answer}")
-					answer = answer.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>').replace('<think>', '<blockquote expandable>').replace('</think>', '</blockquote>')
+					answer = process_special_tags(answer)
 					answer = convert_code_blocks_to_html(answer)
 					logger.debug(f"Converted photo caption: {answer}")
-					await bot.send_photo(chat_id=message.chat.id,reply_to_message_id=message.id, photo=image_bin, caption=answer, parse_mode='HTML')
+					# Sanitize caption but don't split it (Telegram has a smaller limit for captions)
+					sanitized_caption = sanitize_message(answer)
+					await bot.send_photo(chat_id=message.chat.id, reply_to_message_id=message.id, photo=image_bin, caption=sanitized_caption, parse_mode='HTML')
 				else:
-					# Convert any <reasoning> tags to Telegram spoiler tags, remove <answer> tags, and convert code blocks to HTML
+					# Process special tags and convert code blocks to HTML
 					logger.debug(f"Original message: {answer}")
-					answer = answer.replace('<reasoning>', '<blockquote expandable>').replace('</reasoning>', '</blockquote>').replace('<think>', '<blockquote expandable>').replace('</think>', '</blockquote>')
-					answer = answer.replace('<answer>', '').replace('</answer>', '')
+					answer = process_special_tags(answer)
 					answer = convert_code_blocks_to_html(answer)
 					logger.debug(f"Converted message: {answer}")
-					await bot.reply_to(message, answer, parse_mode='HTML')
+					await send_message_safely(bot, message.chat.id, answer, message, parse_mode='HTML')
 					# Store bot's response in histories
 					history[message.chat.id].append([bot_info.first_name, answer])
 					chat_history.append({

@@ -363,7 +363,9 @@ async def photo(message):
 
         # Analyze image using moondream
         from pyollamabot.ollama import analyze_image
-        image_description = await analyze_image(downloaded_file)
+        # Get caption if it exists to use as a question
+        caption = message.caption.replace(f'@{bot_info.username}', '').strip() if message.caption else None
+        image_description = await analyze_image(downloaded_file, caption)
 
         # Store the image analysis in history
         if not history.get(message.chat.id):
@@ -388,9 +390,9 @@ async def photo(message):
         bot_info = await bot.get_me()
         # Prepare message content based on whether it's a reply to a photo or a new photo
         if message.reply_to_message and message.reply_to_message.photo:
-            messages = [{'role': 'user', 'content': f"Пользователь спрашивает{' с подписью: ' + caption if caption else ''} {' с подписью: ' + caption_reply if caption_reply else ''} про фотографию на которой: {image_description}"}]
+            messages = [{'role': 'user', 'content': f"Пользователь спрашивает{' с подписью: ' + caption if caption else ''} {' с подписью: ' + caption_reply if caption_reply else ''} про фотографию. Твой ответ: {image_description}"}]
         else:
-            messages = [{'role': 'user', 'content': f"Пользователь отправил фотографию{' с подписью: ' + caption if caption else ''} {' с подписью: ' + caption_reply if caption_reply else ''}. Вот что на ней: {image_description}"}]
+            messages = [{'role': 'user', 'content': f"Пользователь отправил фотографию{' с подписью: ' + caption if caption else ''} {' с подписью: ' + caption_reply if caption_reply else ''}. Твой ответ: {image_description}"}]
         
         await bot.send_chat_action(chat_id=message.chat.id, action='typing')
         answer, _ = await ask_model(messages=messages)
@@ -629,7 +631,8 @@ async def echo_message(message: Message):
 
 		# Analyze image using moondream
 		from pyollamabot.ollama import analyze_image
-		image_description = await analyze_image(downloaded_file)
+		# Use the user's message as the question about the image
+		image_description = await analyze_image(downloaded_file, msg)
 		caption_reply = message.reply_to_message.caption
 		# Store the image analysis in history with the user's question
 		if not history.get(message.chat.id):
@@ -649,7 +652,7 @@ async def echo_message(message: Message):
 			'type': 'photo_question'
 		})
 
-		messages = [{'role': 'user', 'content': f"Пользователь спрашивает: {msg} про фотографию на которой: {image_description} и подпись {caption_reply}"}]
+		messages = [{'role': 'user', 'content': f"Пользователь спрашивает: {msg} про фотографию. Твой ответ: {image_description}"}]
 		answer, _ = await ask_model(messages=messages)
 		logger.debug(f"Raw model response: {answer}")
 		if answer and not 'im_start' in answer:

@@ -227,23 +227,27 @@ def execute_python(code: str) -> str:
     
     return result, None
 
-async def analyze_image(image_data: bytes) -> str:
-    """Analyze image using moondream model and return description
+async def analyze_image(image_data: bytes, question: str = None) -> str:
+    """Analyze image using model and answer a question about it
 
     Args:
         image_data (bytes): Raw image data to analyze
+        question (str, optional): Question to ask about the image. If None, will describe the image.
     """
     client = ollama.AsyncClient(host=f'http://{OLLAMA_HOST}:11434')
     
     # Convert image to base64
     image_base64 = base64.b64encode(image_data).decode('utf-8')
     
-    # Call moondream model to analyze image
+    # Use the provided question or default to description if none provided
+    prompt = question if question else 'Describe this photo in detail'
+    
+    # Call model to analyze image and answer the question
     response = await client.chat(
         model="gemma3:latest",
         messages=[{
             'role': 'user',
-            'content': 'Describe this photo in detail',
+            'content': prompt,
             'images': [image_base64]
         }]
     )

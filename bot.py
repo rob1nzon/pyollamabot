@@ -13,6 +13,7 @@ import json
 import re
 from contextlib import redirect_stdout
 import textwrap
+from datetime import datetime, timedelta
 
 # Utility functions for message handling
 def sanitize_message(text):
@@ -235,7 +236,15 @@ bot = AsyncTeleBot(token)
 # Handle '/start' and '/help'
 @bot.message_handler(commands=['help', 'start'])
 async def send_welcome(message):
-    text = 'Hi, I am EchoBot.\nJust write me something and I will repeat it!\nUse /выполни to execute Python code.'
+    text = '''Hi, I am EchoBot.
+Just write me something and I will repeat it!
+
+Команды для каканья 💩:
+/show - показать статистику каканья
+/streaks - показать активные стрики
+/test_reminder - тестовое напоминание о стриках
+
+Просто напишите "я покакал" чтобы отметиться!'''
     await send_message_safely(bot, message.chat.id, text, message)
 
 @bot.message_handler(commands=['show'])
@@ -247,10 +256,52 @@ async def show_poop_stats(message):
     
     stats = []
     for user_id, info in data["counters"].items():
-        stats.append(f"{info['username']}: {info['count']} раз")
+        streak = info.get('current_streak', 0)
+        streak_text = f" (стрик: {streak})" if streak > 0 else ""
+        stats.append(f"{info['username']}: {info['count']} раз{streak_text}")
     
     response = "Статистика каканья 💩:\n" + "\n".join(stats)
     await send_message_safely(bot, message.chat.id, response, message)
+
+@bot.message_handler(commands=['streaks'])
+async def show_streak_stats(message):
+    data = load_poop_counter()
+    if not data["counters"]:
+        await send_message_safely(bot, message.chat.id, "Пока никто не какал 💩", message)
+        return
+    
+    # Sort by current streak (descending)
+    sorted_users = sorted(
+        data["counters"].items(),
+        key=lambda x: x[1].get('current_streak', 0),
+        reverse=True
+    )
+    
+    stats = []
+    today = get_today_date()
+    
+    for user_id, info in sorted_users:
+        streak = info.get('current_streak', 0)
+        if streak > 0:
+            # Check if pooped today
+            poop_dates = info.get('poop_dates', [])
+            pooped_today = today in poop_dates
+            status = "✅" if pooped_today else "⚠️"
+            stats.append(f"{status} {info['username']}: {streak} дней подряд")
+    
+    if not stats:
+        response = "Ни у кого нет активного стрика 💩"
+    else:
+        response = "Стрики каканья 🔥💩:\n" + "\n".join(stats)
+        response += "\n\n✅ - покакал сегодня\n⚠️ - еще не какал сегодня"
+    
+    await send_message_safely(bot, message.chat.id, response, message)
+
+@bot.message_handler(commands=['test_reminder'])
+async def test_reminder(message):
+    """Test the streak reminder functionality"""
+    await send_streak_reminders()
+    await send_message_safely(bot, message.chat.id, "Тестовое напоминание отправлено (если есть пользователи со стриками, которые не какали сегодня)", message)
 
 @bot.message_handler(commands=['generate_image'])
 async def generate_image(message):
@@ -421,9 +472,13 @@ def load_poop_counter():
     file_path = '/app/poop_counter.json'
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+            # Ensure we have the chat_ids field
+            if 'chat_ids' not in data:
+                data['chat_ids'] = []
+            return data
     except FileNotFoundError:
-        return {"counters": {}}
+        return {"counters": {}, "chat_ids": []}
 
 def save_poop_counter(data):
     file_path = '/app/poop_counter.json'
@@ -434,14 +489,78 @@ def save_poop_counter(data):
     except Exception as e:
         logger.error(f"Error saving poop counter data: {e}")
 
+def get_today_date():
+    """Get today's date in YYYY-MM-DD format (Moscow timezone)"""
+    moscow_tz = datetime.now() + timedelta(hours=3)  # UTC+3 Moscow time
+    return moscow_tz.strftime('%Y-%m-%d')
+
+def calculate_streak(user_data):
+    """Calculate current streak for a user"""
+    if 'poop_dates' not in user_data:
+        return 0
+    
+    poop_dates = sorted(user_data['poop_dates'])
+    if not poop_dates:
+        return 0
+    
+    today = get_today_date()
+    current_streak = 0
+    
+    # Convert string dates to datetime objects for easier calculation
+    date_objects = [datetime.strptime(date, '%Y-%m-%d') for date in poop_dates]
+    today_obj = datetime.strptime(today, '%Y-%m-%d')
+    
+    # Start from today and go backwards
+    check_date = today_obj
+    
+    while True:
+        check_date_str = check_date.strftime('%Y-%m-%d')
+        if check_date_str in poop_dates:
+            current_streak += 1
+            check_date -= timedelta(days=1)
+        else:
+            break
+    
+    return current_streak
+
+def add_chat_id(chat_id):
+    """Add chat ID to the list of active chats"""
+    data = load_poop_counter()
+    if chat_id not in data["chat_ids"]:
+        data["chat_ids"].append(chat_id)
+        save_poop_counter(data)
+
 def increment_poop_counter(user_id, username):
     data = load_poop_counter()
+    today = get_today_date()
+    
     if str(user_id) not in data["counters"]:
-        data["counters"][str(user_id)] = {"count": 0, "username": username}
-    data["counters"][str(user_id)]["count"] += 1
-    data["counters"][str(user_id)]["username"] = username  # Update username in case it changed
+        data["counters"][str(user_id)] = {
+            "count": 0,
+            "username": username,
+            "poop_dates": [],
+            "current_streak": 0
+        }
+    
+    user_data = data["counters"][str(user_id)]
+    
+    # Initialize missing fields for existing users
+    if 'poop_dates' not in user_data:
+        user_data['poop_dates'] = []
+    if 'current_streak' not in user_data:
+        user_data['current_streak'] = 0
+    
+    # Only increment if not already pooped today
+    if today not in user_data['poop_dates']:
+        user_data["count"] += 1
+        user_data['poop_dates'].append(today)
+        
+        # Calculate new streak
+        user_data['current_streak'] = calculate_streak(user_data)
+    
+    user_data["username"] = username  # Update username in case it changed
     save_poop_counter(data)
-    return data["counters"][str(user_id)]["count"]
+    return user_data["count"], user_data['current_streak']
 
 @bot.message_handler(content_types=['voice', 'video_note'])
 async def voice(message):
@@ -603,13 +722,21 @@ async def echo_message(message: Message):
 
 	msg = message.text.replace(f'@{bot_info.username}', '').strip()
 	
+	# Track this chat ID for reminders
+	add_chat_id(message.chat.id)
+	
 	# Check for "я покакал" message first, before any other processing
 	logger.debug(f"Checking poop message. Original text: '{message.text}', Cleaned msg: '{msg}'")
 	if "покакал" in msg.lower():
 		logger.debug(f"Poop detected for user {message.from_user.first_name} (ID: {message.from_user.id})")
-		count = increment_poop_counter(message.from_user.id, message.from_user.first_name)
-		logger.debug(f"Updated poop count for {message.from_user.first_name}: {count}")
-		response = f"{message.from_user.first_name} покакала уже {count} раз и продолжает"
+		count, streak = increment_poop_counter(message.from_user.id, message.from_user.first_name)
+		logger.debug(f"Updated poop count for {message.from_user.first_name}: {count}, streak: {streak}")
+		
+		if streak > 1:
+			response = f"{message.from_user.first_name} покакала уже {count} раз и продолжает! 🔥 Стрик: {streak} дней подряд!"
+		else:
+			response = f"{message.from_user.first_name} покакала уже {count} раз и продолжает"
+		
 		await send_message_safely(bot, message.chat.id, response)
 		return
 
@@ -714,4 +841,84 @@ async def echo_message(message: Message):
 			time.sleep(2)
 
 
-asyncio.run(bot.polling())
+# Background task for streak reminders
+async def streak_reminder_task():
+    """Background task that runs every hour to check for streak reminders"""
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Check every hour
+            
+            # Get current Moscow time
+            moscow_time = datetime.now() + timedelta(hours=3)
+            current_hour = moscow_time.hour
+            
+            # Send reminders at 22:00 (10 PM) Moscow time - 2 hours before midnight
+            if current_hour == 22:
+                await send_streak_reminders()
+                
+        except Exception as e:
+            logger.error(f"Error in streak reminder task: {e}", exc_info=True)
+
+async def send_streak_reminders():
+    """Send reminders to users with active streaks who haven't pooped today"""
+    try:
+        data = load_poop_counter()
+        if not data["counters"]:
+            return
+        
+        today = get_today_date()
+        reminders_needed = []
+        
+        for user_id, info in data["counters"].items():
+            streak = info.get('current_streak', 0)
+            if streak > 0:
+                # Check if pooped today
+                poop_dates = info.get('poop_dates', [])
+                pooped_today = today in poop_dates
+                
+                if not pooped_today:
+                    reminders_needed.append({
+                        'user_id': user_id,
+                        'username': info['username'],
+                        'streak': streak
+                    })
+        
+        if reminders_needed:
+            # Sort by streak (highest first)
+            reminders_needed.sort(key=lambda x: x['streak'], reverse=True)
+            
+            # Create reminder message
+            reminder_text = "⚠️ НАПОМИНАНИЕ О СТРИКЕ! ⚠️\n\n"
+            reminder_text += "Следующие пользователи имеют активный стрик, но еще не какали сегодня:\n\n"
+            
+            for reminder in reminders_needed:
+                reminder_text += f"🔥 {reminder['username']}: {reminder['streak']} дней подряд\n"
+            
+            reminder_text += f"\n⏰ До конца дня осталось 2 часа!\nНе потеряйте свой стрик! 💩"
+            
+            # Send to all tracked chats
+            chat_ids = data.get("chat_ids", [])
+            for chat_id in chat_ids:
+                try:
+                    await bot.send_message(chat_id, reminder_text)
+                    logger.info(f"Sent streak reminder to chat {chat_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send reminder to chat {chat_id}: {e}")
+            
+            logger.info(f"Streak reminders sent for {len(reminders_needed)} users to {len(chat_ids)} chats")
+            
+    except Exception as e:
+        logger.error(f"Error sending streak reminders: {e}", exc_info=True)
+
+# Start the bot and background tasks
+async def main():
+    # Start the streak reminder task
+    reminder_task = asyncio.create_task(streak_reminder_task())
+    
+    # Start bot polling
+    try:
+        await bot.polling()
+    finally:
+        reminder_task.cancel()
+
+asyncio.run(main())

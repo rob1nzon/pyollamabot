@@ -241,10 +241,19 @@ Just write me something and I will repeat it!
 
 Команды для каканья 💩:
 /show - показать статистику каканья
+/today - показать статистику за сегодня
 /streaks - показать активные стрики
+/achievements - показать свои достижения
 /test_reminder - тестовое напоминание о стриках
 
-Просто напишите "я покакал" чтобы отметиться!'''
+Просто напишите "я покакал" чтобы отметиться!
+Теперь можно какать несколько раз в день! 🎉
+
+🏆 Достижения за:
+• Круглые числа (10, 25, 50, 100...)
+• Красивые числа (палиндромы, повторяющиеся цифры)
+• Особые числа (42, 69, 420, 666, 777, 1337)
+• Стрики (7, 14, 30+ дней подряд)'''
     await send_message_safely(bot, message.chat.id, text, message)
 
 @bot.message_handler(commands=['show'])
@@ -261,6 +270,41 @@ async def show_poop_stats(message):
         stats.append(f"{info['username']}: {info['count']} раз{streak_text}")
     
     response = "Статистика каканья 💩:\n" + "\n".join(stats)
+    await send_message_safely(bot, message.chat.id, response, message)
+
+@bot.message_handler(commands=['today'])
+async def show_today_stats(message):
+    """Show today's poop sessions"""
+    data = load_poop_counter()
+    today = get_today_date()
+    
+    if not data["counters"]:
+        await send_message_safely(bot, message.chat.id, "Пока никто не какал 💩", message)
+        return
+    
+    today_stats = []
+    for user_id, info in data["counters"].items():
+        # Check new structure first
+        poop_sessions = info.get('poop_sessions', {})
+        sessions_today = poop_sessions.get(today, 0)
+        
+        # For backward compatibility, check old structure
+        if sessions_today == 0:
+            poop_dates = info.get('poop_dates', [])
+            if today in poop_dates:
+                sessions_today = 1
+        
+        if sessions_today > 0:
+            if sessions_today == 1:
+                today_stats.append(f"{info['username']}: 1 раз")
+            else:
+                today_stats.append(f"{info['username']}: {sessions_today} раз")
+    
+    if not today_stats:
+        response = f"Сегодня ({today}) никто еще не какал 💩"
+    else:
+        response = f"Статистика каканья за сегодня ({today}) 💩:\n" + "\n".join(today_stats)
+    
     await send_message_safely(bot, message.chat.id, response, message)
 
 @bot.message_handler(commands=['streaks'])
@@ -283,9 +327,11 @@ async def show_streak_stats(message):
     for user_id, info in sorted_users:
         streak = info.get('current_streak', 0)
         if streak > 0:
-            # Check if pooped today
+            # Check if pooped today (new structure)
+            poop_sessions = info.get('poop_sessions', {})
+            # For backward compatibility, also check old structure
             poop_dates = info.get('poop_dates', [])
-            pooped_today = today in poop_dates
+            pooped_today = today in poop_sessions or today in poop_dates
             status = "✅" if pooped_today else "⚠️"
             stats.append(f"{status} {info['username']}: {streak} дней подряд")
     
@@ -296,6 +342,100 @@ async def show_streak_stats(message):
         response += "\n\n✅ - покакал сегодня\n⚠️ - еще не какал сегодня"
     
     await send_message_safely(bot, message.chat.id, response, message)
+
+@bot.message_handler(commands=['achievements'])
+async def show_achievements(message):
+    """Show user achievements"""
+    data = load_poop_counter()
+    user_id = str(message.from_user.id)
+    
+    if user_id not in data["counters"]:
+        await send_message_safely(bot, message.chat.id, "У тебя пока нет достижений! Начни какать, чтобы их получить! 💩", message)
+        return
+    
+    user_data = data["counters"][user_id]
+    achievements = user_data.get('achievements', [])
+    
+    if not achievements:
+        await send_message_safely(bot, message.chat.id, f"У {message.from_user.first_name} пока нет достижений! Продолжай какать! 💩", message)
+        return
+    
+    # Group achievements by type
+    achievement_groups = {}
+    for achievement in achievements:
+        achievement_type = achievement['type']
+        if achievement_type not in achievement_groups:
+            achievement_groups[achievement_type] = []
+        achievement_groups[achievement_type].append(achievement)
+    
+    response = f"🏆 Достижения {message.from_user.first_name}:\n\n"
+    
+    type_emojis = {
+        'round_number': '🎯',
+        'palindrome': '🔄',
+        'repeating': '🔢',
+        'sequential': '📈',
+        'streak': '🔥',
+        'special': '⭐'
+    }
+    
+    type_names = {
+        'round_number': 'Круглые числа',
+        'palindrome': 'Палиндромы',
+        'repeating': 'Повторяющиеся цифры',
+        'sequential': 'Последовательности',
+        'streak': 'Стрики',
+        'special': 'Особые числа'
+    }
+    
+    for achievement_type, group_achievements in achievement_groups.items():
+        emoji = type_emojis.get(achievement_type, '🏅')
+        type_name = type_names.get(achievement_type, achievement_type.title())
+        response += f"{emoji} {type_name}:\n"
+        
+        for achievement in group_achievements:
+            response += f"  • {achievement['title']} ({achievement['date']})\n"
+        response += "\n"
+    
+    response += f"Всего достижений: {len(achievements)} 🎉"
+    await send_message_safely(bot, message.chat.id, response, message)
+
+@bot.message_handler(commands=['fix_counter'])
+async def fix_counter(message):
+    """Fix counter for a specific user (admin only)"""
+    # Simple admin check - you can modify this
+    admin_ids = [161924272]  # Add your admin user IDs here
+    
+    if message.from_user.id not in admin_ids:
+        await send_message_safely(bot, message.chat.id, "У тебя нет прав для этой команды! 🚫", message)
+        return
+    
+    try:
+        # Parse command: /fix_counter user_id new_count
+        parts = message.text.split()
+        if len(parts) != 3:
+            await send_message_safely(bot, message.chat.id, "Использование: /fix_counter <user_id> <new_count>", message)
+            return
+        
+        user_id = parts[1]
+        new_count = int(parts[2])
+        
+        data = load_poop_counter()
+        if user_id in data["counters"]:
+            old_count = data["counters"][user_id]["count"]
+            data["counters"][user_id]["count"] = new_count
+            save_poop_counter(data)
+            
+            username = data["counters"][user_id]["username"]
+            await send_message_safely(bot, message.chat.id,
+                f"✅ Счетчик для {username} изменен с {old_count} на {new_count}", message)
+        else:
+            await send_message_safely(bot, message.chat.id, f"❌ Пользователь {user_id} не найден", message)
+            
+    except ValueError:
+        await send_message_safely(bot, message.chat.id, "❌ Неверный формат числа", message)
+    except Exception as e:
+        await send_message_safely(bot, message.chat.id, f"❌ Ошибка: {str(e)}", message)
 
 @bot.message_handler(commands=['test_reminder'])
 async def test_reminder(message):
@@ -523,6 +663,34 @@ def calculate_streak(user_data):
     
     return current_streak
 
+def calculate_streak_new(user_data):
+    """Calculate current streak for a user with new poop_sessions structure"""
+    if 'poop_sessions' not in user_data:
+        return 0
+    
+    poop_sessions = user_data['poop_sessions']
+    if not poop_sessions:
+        return 0
+    
+    today = get_today_date()
+    current_streak = 0
+    
+    # Convert string dates to datetime objects for easier calculation
+    today_obj = datetime.strptime(today, '%Y-%m-%d')
+    
+    # Start from today and go backwards
+    check_date = today_obj
+    
+    while True:
+        check_date_str = check_date.strftime('%Y-%m-%d')
+        if check_date_str in poop_sessions:
+            current_streak += 1
+            check_date -= timedelta(days=1)
+        else:
+            break
+    
+    return current_streak
+
 def add_chat_id(chat_id):
     """Add chat ID to the list of active chats"""
     data = load_poop_counter()
@@ -538,29 +706,145 @@ def increment_poop_counter(user_id, username):
         data["counters"][str(user_id)] = {
             "count": 0,
             "username": username,
-            "poop_dates": [],
-            "current_streak": 0
+            "poop_sessions": {},  # Изменено: теперь словарь с датами и количеством за день
+            "current_streak": 0,
+            "achievements": []
         }
     
     user_data = data["counters"][str(user_id)]
     
     # Initialize missing fields for existing users
-    if 'poop_dates' not in user_data:
-        user_data['poop_dates'] = []
+    if 'poop_sessions' not in user_data:
+        # Мигрируем старые данные
+        if 'poop_dates' in user_data:
+            user_data['poop_sessions'] = {date: 1 for date in user_data['poop_dates']}
+            del user_data['poop_dates']  # Удаляем старое поле
+        else:
+            user_data['poop_sessions'] = {}
     if 'current_streak' not in user_data:
         user_data['current_streak'] = 0
+    if 'achievements' not in user_data:
+        user_data['achievements'] = []
     
-    # Only increment if not already pooped today
-    if today not in user_data['poop_dates']:
-        user_data["count"] += 1
-        user_data['poop_dates'].append(today)
-        
-        # Calculate new streak
-        user_data['current_streak'] = calculate_streak(user_data)
+    # Всегда увеличиваем счетчик
+    user_data["count"] += 1
+    
+    # Увеличиваем количество за сегодня
+    if today in user_data['poop_sessions']:
+        user_data['poop_sessions'][today] += 1
+    else:
+        user_data['poop_sessions'][today] = 1
+        # Пересчитываем стрик только при первом какании за день
+        user_data['current_streak'] = calculate_streak_new(user_data)
     
     user_data["username"] = username  # Update username in case it changed
     save_poop_counter(data)
-    return user_data["count"], user_data['current_streak']
+    return user_data["count"], user_data['current_streak'], user_data['poop_sessions'][today]
+
+def check_achievements(count, streak):
+    """Check if user achieved any milestones and return achievement info"""
+    achievements = []
+    
+    # Round numbers (every 10, 25, 50, 100, etc.)
+    round_milestones = [10, 25, 50, 75, 100, 150, 200, 250, 300, 400, 500, 750, 1000]
+    if count in round_milestones:
+        achievements.append({
+            'type': 'round_number',
+            'value': count,
+            'title': f'Круглое число: {count}!'
+        })
+    
+    # Beautiful numbers (palindromes, repeating digits, etc.)
+    count_str = str(count)
+    if len(count_str) >= 2:
+        # Palindromes (121, 131, 1221, etc.)
+        if count_str == count_str[::-1]:
+            achievements.append({
+                'type': 'palindrome',
+                'value': count,
+                'title': f'Палиндром: {count}!'
+            })
+        
+        # Repeating digits (111, 222, 333, etc.)
+        if len(set(count_str)) == 1:
+            achievements.append({
+                'type': 'repeating',
+                'value': count,
+                'title': f'Повторяющиеся цифры: {count}!'
+            })
+        
+        # Sequential numbers (123, 234, 345, etc.)
+        if len(count_str) >= 3:
+            is_sequential = True
+            for i in range(len(count_str) - 1):
+                if int(count_str[i+1]) != int(count_str[i]) + 1:
+                    is_sequential = False
+                    break
+            if is_sequential:
+                achievements.append({
+                    'type': 'sequential',
+                    'value': count,
+                    'title': f'Последовательные цифры: {count}!'
+                })
+    
+    # Streak achievements
+    streak_milestones = [7, 14, 30, 50, 100, 365]
+    if streak in streak_milestones:
+        achievements.append({
+            'type': 'streak',
+            'value': streak,
+            'title': f'Стрик {streak} дней!'
+        })
+    
+    # Special numbers
+    special_numbers = {
+        42: 'Ответ на главный вопрос жизни, вселенной и всего такого!',
+        69: 'Nice! 😏',
+        420: 'Blaze it! 🌿',
+        666: 'Число зверя! 😈',
+        777: 'Счастливое число! 🍀',
+        1337: 'Leet! 💻'
+    }
+    
+    if count in special_numbers:
+        achievements.append({
+            'type': 'special',
+            'value': count,
+            'title': f'{count} - {special_numbers[count]}'
+        })
+    
+    return achievements
+
+async def generate_achievement_congratulation(achievement, username):
+    """Generate a congratulation message using Ollama"""
+    try:
+        prompt = f"""Создай короткое веселое поздравление для пользователя {username} за достижение в счетчике каканья: {achievement['title']}
+        
+        Поздравление должно быть:
+        - Веселым и дружелюбным
+        - Не более 2-3 предложений
+        - С эмодзи
+        - На русском языке
+        - Связанным с темой каканья 💩
+        
+        Тип достижения: {achievement['type']}
+        Значение: {achievement['value']}"""
+        
+        messages = [{'role': 'user', 'content': prompt}]
+        congratulation, _ = await ask_model(messages=messages)
+        return congratulation
+    except Exception as e:
+        logger.error(f"Error generating congratulation: {e}")
+        # Fallback congratulations
+        fallbacks = {
+            'round_number': f"🎉 Поздравляем {username} с круглым числом {achievement['value']}! 💩✨",
+            'palindrome': f"🔄 Вау! {username} достиг палиндрома {achievement['value']}! Красота! 💩🎭",
+            'repeating': f"🔢 {username} собрал все одинаковые цифры: {achievement['value']}! Магия! 💩✨",
+            'sequential': f"📈 {username} покорил последовательность {achievement['value']}! Логично! 💩🧮",
+            'streak': f"🔥 {username} держит стрик {achievement['value']} дней! Невероятно! 💩⚡",
+            'special': f"⭐ {username} достиг особого числа {achievement['value']}! {achievement['title']} 💩🎊"
+        }
+        return fallbacks.get(achievement['type'], f"🎉 Поздравляем {username} с достижением! 💩")
 
 @bot.message_handler(content_types=['voice', 'video_note'])
 async def voice(message):
@@ -729,15 +1013,61 @@ async def echo_message(message: Message):
 	logger.debug(f"Checking poop message. Original text: '{message.text}', Cleaned msg: '{msg}'")
 	if "покакал" in msg.lower():
 		logger.debug(f"Poop detected for user {message.from_user.first_name} (ID: {message.from_user.id})")
-		count, streak = increment_poop_counter(message.from_user.id, message.from_user.first_name)
-		logger.debug(f"Updated poop count for {message.from_user.first_name}: {count}, streak: {streak}")
 		
-		if streak > 1:
-			response = f"{message.from_user.first_name} покакала уже {count} раз и продолжает! 🔥 Стрик: {streak} дней подряд!"
+		# Get old count to check achievements
+		data = load_poop_counter()
+		today = get_today_date()
+		old_count = 0
+		sessions_today_before = 0
+		
+		if str(message.from_user.id) in data["counters"]:
+			user_data = data["counters"][str(message.from_user.id)]
+			old_count = user_data.get("count", 0)
+			# Check sessions today before increment
+			poop_sessions = user_data.get('poop_sessions', {})
+			sessions_today_before = poop_sessions.get(today, 0)
+		
+		count, streak, sessions_today = increment_poop_counter(message.from_user.id, message.from_user.first_name)
+		logger.debug(f"Updated poop count for {message.from_user.first_name}: {count}, streak: {streak}, sessions today: {sessions_today}")
+		
+		# Check for achievements only on new milestones
+		achievements = check_achievements(count, streak)
+		
+		# Base response with session count
+		if sessions_today == 1:
+			if streak > 1:
+				response = f"{message.from_user.first_name} покакала уже {count} раз и продолжает! 🔥 Стрик: {streak} дней подряд!"
+			else:
+				response = f"{message.from_user.first_name} покакала уже {count} раз и продолжает! 💩"
 		else:
-			response = f"{message.from_user.first_name} покакала уже {count} раз и продолжает"
+			response = f"{message.from_user.first_name} покакала еще раз! 💩 Сегодня уже {sessions_today} раз, всего: {count}"
 		
 		await send_message_safely(bot, message.chat.id, response)
+		
+		# Send achievement congratulations only for new achievements
+		if achievements:
+			for achievement in achievements:
+				try:
+					congratulation = await generate_achievement_congratulation(achievement, message.from_user.first_name)
+					await send_message_safely(bot, message.chat.id, congratulation)
+					
+					# Save achievement to user data
+					data = load_poop_counter()
+					if str(message.from_user.id) in data["counters"]:
+						user_achievements = data["counters"][str(message.from_user.id)].get('achievements', [])
+						achievement_record = {
+							'type': achievement['type'],
+							'value': achievement['value'],
+							'title': achievement['title'],
+							'date': today
+						}
+						user_achievements.append(achievement_record)
+						data["counters"][str(message.from_user.id)]['achievements'] = user_achievements
+						save_poop_counter(data)
+						
+				except Exception as e:
+					logger.error(f"Error processing achievement: {e}")
+		
 		return
 
 	mention = (message.reply_to_message and message.reply_to_message.from_user.username == bot_info.username)
@@ -872,9 +1202,11 @@ async def send_streak_reminders():
         for user_id, info in data["counters"].items():
             streak = info.get('current_streak', 0)
             if streak > 0:
-                # Check if pooped today
+                # Check if pooped today (new structure)
+                poop_sessions = info.get('poop_sessions', {})
+                # For backward compatibility, also check old structure
                 poop_dates = info.get('poop_dates', [])
-                pooped_today = today in poop_dates
+                pooped_today = today in poop_sessions or today in poop_dates
                 
                 if not pooped_today:
                     reminders_needed.append({

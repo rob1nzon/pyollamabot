@@ -826,6 +826,7 @@ async def generate_achievement_congratulation(achievement, username):
         - С эмодзи
         - На русском языке
         - Связанным с темой каканья 💩
+        /no_think
         
         Тип достижения: {achievement['type']}
         Значение: {achievement['value']}"""

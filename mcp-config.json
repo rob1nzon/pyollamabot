@@ -1,0 +1,15 @@
+{
+    "mcpServers": {
+        "ddg-search": {
+            "command": "uvx",
+            "args": ["duckduckgo-mcp-server"]
+        },
+        "basic-memory": {
+            "command": "uvx",
+            "args": [
+            "basic-memory",
+            "mcp"
+            ]
+        }
+    }
+}

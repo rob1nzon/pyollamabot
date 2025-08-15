@@ -9,9 +9,9 @@ from wyoming.client import AsyncTcpClient
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-OLLAMA_HOST = os.getenv(key="OLLAMA_HOST")
+WISPER_HOST = os.getenv(key="WISPER_HOST")
 class WyomingTranscriber:
-    def __init__(self, host: str = OLLAMA_HOST, port: int = 10300):
+    def __init__(self, host: str = WISPER_HOST, port: int = 10300):
         self.host = host
         self.port = port
         self._client = None

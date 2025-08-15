@@ -10,3 +10,14 @@ services:
       - ./:/app
     command: python3 /app/bot.py
     # command: tail -f /dev/null
+  ollama-mcp-bridge:
+    image: ollama-mcp-bridge
+    ports:
+      - "8001:8000"
+    environment:
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - CORS_ORIGINS=*
+    volumes:
+      - ./mcp-config.json:/mcp-config.json
+    restart: unless-stopped
+    command: uv run ollama-mcp-bridge --ollama-url=http://host.docker.internal:11434

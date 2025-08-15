@@ -1,6 +1,6 @@
 import logging
 import os
-import ollama
+import aiohttp
 import base64
 import inspect
 from typing import Callable, List, Dict, Any
@@ -19,15 +19,15 @@ from pyollamabot.easydiffusion import create_image, poll_image_status
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
 # Global history storage
 chat_history: List[Dict[str, Any]] = []
 
-OLLAMA_HOST = os.getenv(key="OLLAMA_HOST")
-OLLAMA_PORT = os.getenv(key="OLLAMA_PORT")
-OLLAMA_LOCALHOST = os.getenv(key="OLLAMA_HOST")
-OLLAMA_LOCALPORT = os.getenv(key="OLLAMA_PORT")
+LMSTUDIO_HOST = os.getenv(key="LMSTUDIO_HOST", default="localhost")
+LMSTUDIO_PORT = os.getenv(key="LMSTUDIO_PORT", default="1234")
+LMSTUDIO_MODEL = os.getenv(key="LMSTUDIO_MODEL", default="local-model")
+LMSTUDIO_MODEL_VISION = os.getenv(key="LMSTUDIO_MODEL_VISION", default="local-model")
 
-OLLAMA_MODEL = os.getenv(key="OLLAMA_MODEL")
 
 from docstring_parser import parse
 
@@ -81,7 +81,6 @@ def analyze_chat_history(query: str = None) -> str:
         query (str, optional): Search term to filter messages
     """
 
-
     global chat_history
 
     logger.debug("analyze")
@@ -89,7 +88,7 @@ def analyze_chat_history(query: str = None) -> str:
     filtered_history = chat_history
     if query:
         filtered_history = [
-            msg for msg in filtered_history 
+            msg for msg in chat_history 
             if query.lower() in str(msg.get('content', '')).lower()
         ]
     logger.debug(filtered_history)
@@ -123,7 +122,6 @@ def get_chat_history(limit: int = None) -> str:
     global chat_history
 
     logger.debug("get chat history")
-   
     
     if limit:
         try:
@@ -238,7 +236,6 @@ async def analyze_image(image_data: bytes, question: str = None) -> str:
         image_data (bytes): Raw image data to analyze
         question (str, optional): Question to ask about the image. If None, will describe the image.
     """
-    client = ollama.AsyncClient(host=f'http://{OLLAMA_LOCALHOST}:{OLLAMA_LOCALPORT}')
     
     # Convert image to base64
     image_base64 = base64.b64encode(image_data).decode('utf-8')
@@ -246,17 +243,37 @@ async def analyze_image(image_data: bytes, question: str = None) -> str:
     # Use the provided question or default to description if none provided
     prompt = question if question else 'Describe this photo in detail'
     
-    # Call model to analyze image and answer the question
-    response = await client.chat(
-        model="gemma3:latest",
-        messages=[{
-            'role': 'user',
-            'content': prompt,
-            'images': [image_base64]
-        }]
-    )
+    # Prepare the request payload
+    payload = {
+        "model": LMSTUDIO_MODEL_VISION,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 1000
+    }
     
-    return response['message']['content']
+    async with aiohttp.ClientSession() as session:
+        url = f"http://{LMSTUDIO_HOST}:{LMSTUDIO_PORT}/v1/chat/completions"
+        async with session.post(url, json=payload) as response:
+            if response.status == 200:
+                result = await response.json()
+                return result['choices'][0]['message']['content']
+            else:
+                raise Exception(f"LM Studio API error: {response.status}")
 
 def create_picture(description) -> str:
     """Create picture, add object on picture, change picture, if change remember history. Use english
@@ -265,68 +282,35 @@ def create_picture(description) -> str:
         description (str): Translate to english and description of what you want to draw, more details
     """  
     image64 = ""
-    stream=create_image(description)
+    stream = create_image(description)
     image64 = poll_image_status(stream)
     return f'create_picture({description})', image64
 
 async def ask_model(messages: List[Dict[str, Any]]):
-    model = OLLAMA_MODEL
-    image = None
-    client = ollama.AsyncClient(host=f'http://{OLLAMA_HOST}:{OLLAMA_PORT}')
-
-    # First API call: Send the query and function description to the model
-    response = ""
-    attempt = 0
-    while not response and attempt < 10:
-        response = await client.chat(
-            model=model,
-            messages=messages,
-            #tools=functions_to_metadata([
-                # create_picture, 
-                # search_internet, 
-                # execute_python,
-            #  analyze_chat_history,
-            #   get_chat_history
-            #])
-        )
-        attempt += 1
-
-
-    # Store in global history
-    chat_history.append(response['message'])
-    messages.append(response['message'])
-
-    full_response = ''
-    # Check if the model decided to use the provided function
-    if not response['message'].get('tool_calls'):
-        full_response += response['message']['content']
-        return full_response, image
-
-    # Process function calls made by the model
-    if response['message'].get('tool_calls'):
-        print('Call function')
-        available_functions = {
-            # 'create_picture': create_picture,
-            # 'search_internet': search_internet,
-            # 'execute_python': execute_python,
-            'analyze_chat_history': analyze_chat_history,
-            'get_chat_history': get_chat_history
-        }
-        for tool in response['message']['tool_calls']:
-            function_to_call = available_functions[tool['function']['name']]
-            print(tool)
-            function_response, image = function_to_call(**tool['function']['arguments'])
-            # Add function response to the conversation
-            tool_message = {
-                'role': 'tool',
-                'content': function_response,
-            }
-            messages.append(tool_message)
-            chat_history.append(tool_message)
-
-    # Second API call: Get final response from the model
-    final_response = await client.chat(model=model, messages=messages)
-    chat_history.append(final_response['message'])
-    full_response += final_response['message']['content']
-
-    return full_response, image
+    """Send messages to LM Studio and get response"""
+    
+    # Prepare the request payload
+    payload = {
+        "model": LMSTUDIO_MODEL,
+        "messages": messages,
+        "max_tokens": 2000,
+        "temperature": 0.7,
+        "stream": False
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        url = f"http://{LMSTUDIO_HOST}:{LMSTUDIO_PORT}/v1/chat/completions"
+        async with session.post(url, json=payload) as response:
+            if response.status == 200:
+                result = await response.json()
+                
+                # Store in global history
+                chat_history.append({
+                    'role': 'assistant',
+                    'content': result['choices'][0]['message']['content']
+                })
+                
+                return result['choices'][0]['message']['content'], None
+            else:
+                error_text = await response.text()
+                raise Exception(f"LM Studio API error: {response.status} - {error_text}")

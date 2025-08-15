@@ -913,7 +913,7 @@ async def voice(message):
         
         if not text:
             logger.warning("Transcription failed or returned empty text")
-            await send_message_safely(bot, message.chat.id, 'Не удалось распознать голосовое сообщение. Попробуйте еще раз или отправьте текст.', message)
+            # await send_message_safely(bot, message.chat.id, 'Не удалось распознать голосовое сообщение. Попробуйте еще раз или отправьте текст.', message)
             return
 		
         # Process special tags and convert code blocks to HTML
